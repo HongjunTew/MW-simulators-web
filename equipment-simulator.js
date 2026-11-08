@@ -143,6 +143,113 @@ async function sleepWithEquipmentPause(durationMs) {
     }
 }
 
+const DIAMONDS_PER_BOOST_RUNE = 5;
+const DIAMONDS_PER_PROTECT_RUNE = 12;
+const SHARDS_PER_CRYSTAL = [2, 4, 10, 20, 40, 70, 120, 200];      // by equipment level
+const RUNES_PER_EQUIPMENT_LEVEL = [1, 2, 4, 7, 11, 15, 21, 25];   // runes per try, by equipment level
+
+// Runs the enhancement simulation numSimulations times and returns the totals.
+// A failure without a protect rune drops one level; with one, the level is kept.
+// "Tries" for a level count every attempt since the last level change, which is what the
+// guarantee counter tracks, and are recorded under the level that was reached.
+async function runEquipmentSimulations(opts) {
+    const {
+        currentEnhancement, targetEnhancement, equipmentLevelIndex, numSimulations,
+        boostRune, boostRuneMinLevel, protectRune, protectRuneMinLevel,
+        interactive = false, progressBar = null
+    } = opts;
+    const runeMultiplier = RUNES_PER_EQUIPMENT_LEVEL[equipmentLevelIndex];
+    const triesByLevel = new Array(levelLabels.length + 2).fill(0);
+    const levelUpsByLevel = new Array(levelLabels.length + 2).fill(0);
+    let totalAttempts = 0;
+    let totalBoostRunesUsed = 0;
+    let totalProtectRunesUsed = 0;
+    let minAttempts = Number.MAX_SAFE_INTEGER;
+    let countOfLowestAttempts = 0;
+    let lastEnhancementLevel = currentEnhancement;
+    const delay = interactive ? 400 : 0;
+
+    for (let sim = 0; sim < numSimulations; sim++) {
+        let enhancementLevel = currentEnhancement;
+        let attempts = 0;
+        let enhanceGar = 0;
+
+        while (enhancementLevel < targetEnhancement) {
+            attempts++;
+            enhanceGar++;
+            const applyBoostRune = boostRune && enhancementLevel >= boostRuneMinLevel;
+            const applyProtectRune = protectRune && enhancementLevel >= protectRuneMinLevel;
+            const successRate = successRates[enhancementLevel - 1] + (applyBoostRune ? 5 : 0);
+            const guarantee = enhancementGuarantees[enhancementLevel - 1];
+            const enhanceSuccess = enhanceGar >= guarantee || Math.random() * 100 < successRate;
+            if (interactive) {
+                await waitForEquipmentResume();
+                appendEquipmentLog(`Attempt ${attempts}: L${enhancementLevel} -> ${enhancementLevel + 1} (${enhanceGar}/${guarantee} guarantee).`, { skipTextWhenSound: true });
+            }
+
+            if (enhanceSuccess) {
+                enhancementLevel++;
+                triesByLevel[enhancementLevel] += enhanceGar;
+                levelUpsByLevel[enhancementLevel]++;
+                enhanceGar = 0; // the guarantee counter restarts at every new level
+                if (interactive) {
+                    appendEquipmentLog(`Success! Current level: ${enhancementLevel}.`, { soundKey: 'success', skipTextWhenSound: true });
+                    if (progressBar) progressBar.value = Math.max(0, enhancementLevel - currentEnhancement);
+                }
+            } else if (applyProtectRune) {
+                if (interactive) {
+                    appendEquipmentLog(`Failed, but the protect rune kept you at level ${enhancementLevel}.`, { soundKey: 'fail', skipTextWhenSound: true });
+                }
+            } else {
+                enhancementLevel = Math.max(enhancementLevel - 1, 2);
+                if (interactive) {
+                    appendEquipmentLog(`Failed! Dropped to ${enhancementLevel}.`, { soundKey: 'fail', skipTextWhenSound: true });
+                    if (progressBar) progressBar.value = Math.max(0, enhancementLevel - currentEnhancement);
+                }
+            }
+
+            if (applyBoostRune) totalBoostRunesUsed += runeMultiplier;
+            if (applyProtectRune) totalProtectRunesUsed += runeMultiplier;
+
+            if (delay) {
+                await sleepWithEquipmentPause(delay);
+            }
+        }
+
+        lastEnhancementLevel = enhancementLevel;
+        if (attempts === minAttempts) {
+            countOfLowestAttempts++;
+        } else if (attempts < minAttempts) {
+            minAttempts = attempts;
+            countOfLowestAttempts = 1;
+        }
+        totalAttempts += attempts;
+    }
+
+    const perLevel = [];
+    let allTries = 0;
+    let allLevelUps = 0;
+    for (let level = 0; level < triesByLevel.length; level++) {
+        if (levelUpsByLevel[level] > 0) {
+            perLevel.push({ level, averageTries: triesByLevel[level] / levelUpsByLevel[level] });
+            allTries += triesByLevel[level];
+            allLevelUps += levelUpsByLevel[level];
+        }
+    }
+
+    return {
+        totalAttempts,
+        totalBoostRunesUsed,
+        totalProtectRunesUsed,
+        minAttempts,
+        countOfLowestAttempts,
+        lastEnhancementLevel,
+        shardsRequired: SHARDS_PER_CRYSTAL[equipmentLevelIndex] * totalAttempts,
+        averageTriesPerLevelUp: allLevelUps ? allTries / allLevelUps : 0,
+        perLevel
+    };
+}
+
 equipmentPauseButton.addEventListener('click', () => {
     if (!equipmentRunning) {
         return;
@@ -203,14 +310,6 @@ equipmentStartButton.addEventListener('click', async () => {
         equipmentProgress.max = targetEnhancement - currentEnhancement;
     }
 
-    let totalAttempts = 0;
-    let totalShardsRequired = 0;
-    let totalBoostRunesUsed = 0;
-    let totalProtectRunesUsed = 0;
-    let totalProtectRunesDiamondCost = 0; // Variable to track the total protect rune diamond cost
-    let totalBoostRunesDiamondCost = 0; // Variable to track the total boost rune diamond cost across all simulations
-    let minAttempts = Number.MAX_SAFE_INTEGER;
-    let countOfLowestAttempts = 0;
     const equipmentLevelIndex = equipmentLevels.indexOf(equipmentLevel);
     if (equipmentLevelIndex === -1) {
         alert('Invalid equipment level selected.');
@@ -221,122 +320,43 @@ equipmentStartButton.addEventListener('click', async () => {
         return;
     }
 
-    //main part of the program
-    const shardsPerCrystal = [2, 4, 10, 20, 40, 70, 120, 200];
-    const runesPerEquipmentLevel = [1, 2, 4, 7, 11, 15, 21, 25];
-    const runeMultiplier = runesPerEquipmentLevel[equipmentLevelIndex];  // Define runeMultiplier here
-    let totalGarLevels = 0; // Initialize totalGarLevels before the for loop
-    let garLevels = Array(targetEnhancement - currentEnhancement).fill(0);
-    let successfulEnhancements = Array(targetEnhancement - currentEnhancement).fill(0);
-    let lastEnhancementLevel = currentEnhancement;
-
-    for (let sim = 0; sim < numSimulations; sim++) {
-        let enhancementLevel = currentEnhancement;
-        let attempts = 0;
-        let boostRunesUsed = 0;
-        let protectRunesUsed = 0;
-        let protectRunesDiamondCost = 0; // Variable to track the protect rune diamond cost for the current simulation
-        let boostRunesDiamondCost = 0; // Variable to track the boost rune diamond cost for the current simulation
-        let hasReachedLevelTwoTwice = false;
-        let enhanceGar = 0;
-        const delay = interactiveEnhancement ? 400 : 0;
-
-        while (enhancementLevel < targetEnhancement) {
-            attempts++;
-            enhanceGar++;
-            const applyBoostRune = boostRune && enhancementLevel >= boostRuneMinLevel;
-            const applyProtectRune = protectRune && enhancementLevel >= protectRuneMinLevel;
-            const successRate = successRates[enhancementLevel - 1] + (applyBoostRune ? 5 : 0);
-            const enhanceSuccess = enhanceGar >= enhancementGuarantees[enhancementLevel - 1] || Math.random() * 100 < successRate;
-            await waitForEquipmentResume();
-            if (interactiveEnhancement) {
-                appendEquipmentLog(`Attempt ${attempts}: L${enhancementLevel} -> ${enhancementLevel + 1} (${enhanceGar}/${enhancementGuarantees[enhancementLevel - 1]} guarantee).`, { skipTextWhenSound: true });
-            }
-
-            if (enhanceSuccess) {
-                garLevels[enhancementLevel - currentEnhancement] += enhanceGar;
-                successfulEnhancements[enhancementLevel - currentEnhancement]++; // Count the number of successful enhancements for each level
-                enhancementLevel++;
-                enhanceGar = 0; // Reset enhanceGar whenever the enhancement level changes
-                if (interactiveEnhancement) {
-                    appendEquipmentLog(`Success! Current level: ${enhancementLevel}.`, { soundKey: 'success', skipTextWhenSound: true });
-                    equipmentProgress.value = Math.max(0, enhancementLevel - currentEnhancement);
-                }
-            } else if (!applyProtectRune) {
-                enhancementLevel = Math.max(enhancementLevel - 1, 2);
-                if (interactiveEnhancement) {
-                    appendEquipmentLog(`Failed! Dropped to ${enhancementLevel}.`, { soundKey: 'fail', skipTextWhenSound: true });
-                }
-            } else if (enhancementLevel === 2) {
-                if (hasReachedLevelTwoTwice) {
-                    break;
-                }
-                hasReachedLevelTwoTwice = true;
-                if (interactiveEnhancement) {
-                    appendEquipmentLog('Failed at level 2 with protect rune active, stopping simulation.', { soundKey: 'fail' });
-                }
-            }
-
-            totalGarLevels += enhanceGar;
-            if (applyBoostRune) {
-                boostRunesUsed += runeMultiplier;
-                boostRunesDiamondCost += 5; // Add the diamond cost of the boost rune for the current simulation
-            }
-            if (applyProtectRune) {
-                protectRunesUsed += runeMultiplier;
-                protectRunesDiamondCost += 12; // Add the diamond cost of the protect rune for the current simulation
-            }
-
-            if (delay) {
-                await sleepWithEquipmentPause(delay);
-            }
-        }
-
-        lastEnhancementLevel = enhancementLevel;
-
-        if (attempts === minAttempts) {
-            countOfLowestAttempts++;
-        } else if (attempts < minAttempts) {
-            minAttempts = attempts;
-            countOfLowestAttempts = 1;
-        }
-        totalAttempts += attempts;
-        totalBoostRunesUsed += boostRunesUsed;
-        totalProtectRunesUsed += protectRunesUsed;
-        totalProtectRunesDiamondCost += protectRunesDiamondCost; // Add the protect rune diamond cost of the current simulation to the total
-        totalBoostRunesDiamondCost += boostRunesDiamondCost; // Add the boost rune diamond cost of the current simulation to the total
-    }
-
-    const averageGarLevel = totalGarLevels / numSimulations; // Calculate the average guarantee outside the for loop
-    const diamondCostPerProtectRune = 12; // Base cost of protect rune
-    const diamondCostPerBoostRune = 5; // Base cost of boost rune
-    const shardsRequired = shardsPerCrystal[equipmentLevelIndex] * totalAttempts;
+    const sim = await runEquipmentSimulations({
+        currentEnhancement, targetEnhancement, equipmentLevelIndex, numSimulations,
+        boostRune, boostRuneMinLevel, protectRune, protectRuneMinLevel,
+        interactive: interactiveEnhancement, progressBar: equipmentProgress
+    });
+    const totalAttempts = sim.totalAttempts;
+    const totalBoostRunesUsed = sim.totalBoostRunesUsed;
+    const totalProtectRunesUsed = sim.totalProtectRunesUsed;
+    const minAttempts = sim.minAttempts;
+    const lastEnhancementLevel = sim.lastEnhancementLevel;
+    const averageGarLevel = sim.averageTriesPerLevelUp;
+    const shardsRequired = sim.shardsRequired;
     const diamondsPerDollar = 1000 / 19.99;
-    const protectRunesDiamondCost = totalProtectRunesUsed * diamondCostPerProtectRune;
-    const boostRunesDiamondCost = totalBoostRunesUsed * diamondCostPerBoostRune;
+    // Every diamond figure comes from the rune counts, so single and multiple runs always agree.
+    const protectRunesDiamondCost = totalProtectRunesUsed * DIAMONDS_PER_PROTECT_RUNE;
+    const boostRunesDiamondCost = totalBoostRunesUsed * DIAMONDS_PER_BOOST_RUNE;
     const totalDiamondCost = protectRunesDiamondCost + boostRunesDiamondCost;
     const averageTotalDiamondCost = totalDiamondCost / numSimulations;
     const averageDollarCost = (averageTotalDiamondCost / diamondsPerDollar).toFixed(2);
-    const averageProtectRunesDiamondCost = totalProtectRunesDiamondCost / numSimulations;
-    const averageBoostRunesDiamondCost = totalBoostRunesDiamondCost / numSimulations;
-    const probabilityOfLowestChance = countOfLowestAttempts / numSimulations;
+    const averageProtectRunesDiamondCost = protectRunesDiamondCost / numSimulations;
+    const averageBoostRunesDiamondCost = boostRunesDiamondCost / numSimulations;
+    const probabilityOfLowestChance = sim.countOfLowestAttempts / numSimulations;
 
     //let's parse together our results
     let resultMessage = '';
-    // Calculate average success guarantees for each level
-
-    const averageGarLevels = garLevels.map((totalGar, idx) => totalGar / successfulEnhancements[idx]);
-    const averageGarLevelsStr = averageGarLevels.map((avg, idx) => `L${currentEnhancement + idx + 1}: ${avg.toFixed(2)}`).join(', ');
+    const averageGarLevelsStr = sim.perLevel
+        .map(({ level, averageTries }) => `L${level}: ${averageTries.toFixed(2)}`)
+        .join(', ');
 
     if (runMultipleSimulations && !interactiveEnhancement) {
         const averageAttempts = Math.round(totalAttempts / numSimulations);
         const averageShardsRequired = Math.round(shardsRequired / numSimulations);
         const averageBoostRunesUsed = Math.round(totalBoostRunesUsed / numSimulations);
         const averageProtectRunesUsed = Math.round(totalProtectRunesUsed / numSimulations);
-        const averageShardsUsed = shardsPerCrystal[equipmentLevelIndex] * averageAttempts;
         resultMessage = `On average, it would take you ${averageAttempts} enhancements to go from level ${currentEnhancement} (${levelLabels[currentEnhancement - 1]}) to level ${targetEnhancement} (${levelLabels[targetEnhancement - 1]}).`;
         resultMessage += ` Average Shards required: ${averageShardsRequired}.`;
-        resultMessage += ` Average guarantee success: ${averageGarLevel.toFixed(2)}.`; // Add the average
+        resultMessage += ` On average, each level-up took ${averageGarLevel.toFixed(2)} tries.`;
         if (boostRune) {
             resultMessage += ` Average boost rune diamond cost: ${averageBoostRunesDiamondCost.toFixed(2)} diamonds.`;
         }
@@ -349,15 +369,15 @@ equipmentStartButton.addEventListener('click', async () => {
         resultMessage += ` Probability of lowest-chance (${minAttempts} enhancements) happening: ${(probabilityOfLowestChance * 100).toFixed(4)}%.`;
     } else {
         resultMessage = `It would take you ${totalAttempts} enhancements to go from level ${currentEnhancement} (${levelLabels[currentEnhancement - 1]}) to level ${targetEnhancement} (${levelLabels[targetEnhancement - 1]}). Shards required: ${shardsRequired}.`;
-        resultMessage += ` Average guarantee levels: ${averageGarLevelsStr}.`;
+        resultMessage += ` Tries for each level: ${averageGarLevelsStr}.`;
         if (boostRune) {
-            resultMessage += `Boost Runes used: ${totalBoostRunesUsed}. Boost runes would cost ${boostRunesDiamondCost} diamonds.`;
+            resultMessage += ` Boost Runes used: ${totalBoostRunesUsed}. Boost runes would cost ${boostRunesDiamondCost} diamonds.`;
         }
         if (protectRune) {
-            resultMessage += `Protect Runes used: ${totalProtectRunesUsed}. Protector runes would cost ${protectRunesDiamondCost} diamonds.`;
+            resultMessage += ` Protect Runes used: ${totalProtectRunesUsed}. Protector runes would cost ${protectRunesDiamondCost} diamonds.`;
         }
         if (boostRune || protectRune) {
-            resultMessage += `Total diamond cost: ${totalDiamondCost}. This costs around $${(totalDiamondCost / diamondsPerDollar).toFixed(2)}.`;
+            resultMessage += ` Total diamond cost: ${totalDiamondCost}. This costs around $${(totalDiamondCost / diamondsPerDollar).toFixed(2)}.`;
         }
     }
 
