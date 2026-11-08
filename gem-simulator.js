@@ -147,11 +147,13 @@ async function sleepWithGemPause(durationMs) {
 // - The extra shard is used up on every attempt, success or failure...
 // - ...except that a Gem Protection Rune (399 diamonds) keeps everything on a
 //   failure: no gem shatters and the extra shard is kept too.
+// - The protection rune itself is used up on every attempt, success or failure.
+// - 4 shards of one level make 1 gem of that level, which never fails.
 // ---------------------------------------------------------------------------
 const GEM_BASE_SUCCESS = 0.50;
 const EXTRA_SHARD_BONUS = 0.20;
 const EXTRA_SHARD_MIN_LEVEL = 2;   // the game only allows an extra shard from level 2 gems up
-const PROTECTION_RUNE_USED_ON_SUCCESS = false; // runes are only counted when they save a failure
+const PROTECTION_RUNE_USED_ON_SUCCESS = true; // "fail or success, rain or shine" (Tomi)
 
 // One combine attempt of 3 gems of `level`, applied to the gems/shards inventory arrays.
 // Returns what happened so callers can log it.
@@ -175,14 +177,29 @@ function combineGemsOnce(level, gems, shards, useExtraShard, isProtected) {
 }
 
 // Combine everything upwards, level by level, like a player clearing their bag.
+// With autoCombineShards, every 4 leftover shards of a level are first turned back
+// into a gem of that level (the game allows this and it never fails).
 async function combineAllGems(gems, shards, useExtraShard, ProtLevel, interactiveOptions = {}) {
-    const { interactive = false, progressBar = null } = interactiveOptions;
+    const { interactive = false, progressBar = null, autoCombineShards = false } = interactiveOptions;
     const shardsPerGemLevel = buildShardsPerGemLevel();
     const delay = interactive ? 350 : 0;
     let runesUsed = 0;
     let attempts = 0;
 
-    for (let currentLevel = 1; currentLevel < 9; currentLevel++) {
+    function shardsIntoGems(level) {
+        if (!autoCombineShards) return;
+        while (shards[level] >= 4) {
+            shards[level] -= 4;
+            gems[level] += 1;
+            if (interactive) {
+                appendGemLog(`Combined 4 Level ${level} shards into a Level ${level} gem.`);
+            }
+        }
+    }
+
+    for (let currentLevel = 1; currentLevel <= 9; currentLevel++) {
+        shardsIntoGems(currentLevel);
+        if (currentLevel === 9) break; // level 9 is the highest gem
         while (gems[currentLevel] >= 3) {
             const isProtected = currentLevel >= ProtLevel;
             attempts++;
@@ -215,6 +232,7 @@ async function combineAllGems(gems, shards, useExtraShard, ProtLevel, interactiv
             if (delay) {
                 await sleepWithGemPause(delay);
             }
+            shardsIntoGems(currentLevel);
         }
     }
     return runesUsed;
@@ -474,7 +492,8 @@ gemStartButton.addEventListener('click', async function() {
     } else {
         const resultData = await calculateGemLevels(numShards, useExtraShard, ProtLevel, arnebiaPrice, {
             interactive: interactiveGemSimulation,
-            progressBar: gemProgress
+            progressBar: gemProgress,
+            autoCombineShards: document.getElementById('autoCombineShards').checked
         });
         resultMessage = `You used ${resultData.shardsUsed} shards to create `;
         for (let level in resultData.gemLevels) {

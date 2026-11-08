@@ -84,6 +84,28 @@ test('a protection rune keeps all gems and the extra shard on a failure', () => 
     assert.deepStrictEqual([gems[3], shards[3]], [3, 1]);
 });
 
+test('a protection rune is used up on a successful combine too', () => {
+    const ctx = loadSimulators();
+    setRandom(ctx, 0.01);
+    const gems = empty(); const shards = empty();
+    gems[4] = 3;
+    const r = ctx.combineGemsOnce(4, gems, shards, false, true);
+    assert.strictEqual(r.success, true);
+    assert.strictEqual(r.runeUsed, true);
+});
+
+test('with auto-combine on, no level is left holding 4 or more shards', async () => {
+    const ctx = loadSimulators();
+    setRandom(ctx, 8080, true);
+    const res = await ctx.calculateGemLevels(5000, false, 100, 10, { autoCombineShards: true });
+    for (let lvl = 1; lvl <= 9; lvl++) {
+        assert.ok(res.leftoverShardsByLevel[lvl] < 4, `level ${lvl} has ${res.leftoverShardsByLevel[lvl]} shards`);
+    }
+    setRandom(ctx, 8080, true);
+    const off = await ctx.calculateGemLevels(5000, false, 100, 10, {});
+    assert.ok(off.leftoverShards > res.leftoverShards, 'auto-combine should use up leftover shards');
+});
+
 test('shard mode: shards are never created or lost, only moved', async () => {
     const ctx = loadSimulators();
     setRandom(ctx, 12345, true);

@@ -138,7 +138,8 @@
                 arnebiaPrice,
                 {
                     interactive: interactiveGemSimulation,
-                    progressBar: gemProgress
+                    progressBar: gemProgress,
+                    autoCombineShards: document.getElementById('autoCombineShards').checked
                 }
             );
         } catch (error) {
