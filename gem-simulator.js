@@ -307,8 +307,9 @@ function simulateShardsForOneGem(targetGemLevel, useExtraShard) {
                 shards[level] -= 4;
                 gems[level] += 1;
             } else if (level === 1) {
-                bought++;
-                shards[1]++;
+                const needed = 4 - shards[1]; // buy just enough for one more gem
+                bought += needed;
+                shards[1] += needed;
             } else {
                 ensureGems(level - 1, 3);
                 combineGemsOnce(level - 1, gems, shards, useExtraShard, false);
@@ -320,7 +321,11 @@ function simulateShardsForOneGem(targetGemLevel, useExtraShard) {
     return bought;
 }
 
-function calculateTargetGemLevel(targetGemLevel, useExtraShard, runs = 1000) {
+// Fewer runs for the highest levels, so the page never freezes for long (each level
+// up is about 4 times more work). The result text always says how many runs were used.
+const TARGET_RUNS_BY_LEVEL = [0, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 300, 100];
+
+function calculateTargetGemLevel(targetGemLevel, useExtraShard, runs = TARGET_RUNS_BY_LEVEL[targetGemLevel] || 200) {
     let total = 0;
     let min = Infinity;
     let max = 0;

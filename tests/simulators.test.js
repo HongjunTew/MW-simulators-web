@@ -113,6 +113,18 @@ test('target level: the extra shard makes high gems cheaper', () => {
     assert.ok(withShard < without, `with ${withShard}, without ${without}`);
 });
 
+test('target level 9 finishes quickly enough not to freeze the page', () => {
+    const ctx = loadSimulators();
+    setRandom(ctx, 2024, true);
+    for (const useExtraShard of [false, true]) {
+        const start = Date.now();
+        const r = ctx.calculateTargetGemLevel(9, useExtraShard); // default run count
+        const ms = Date.now() - start;
+        assert.ok(ms < 1000, `level 9 (extra shard ${useExtraShard}) took ${ms} ms`);
+        assert.ok(r.average > 100000, `average ${r.average}`);
+    }
+});
+
 const equipmentBase = {
     equipmentLevelIndex: 4, numSimulations: 300,
     boostRune: false, boostRuneMinLevel: Number.MAX_SAFE_INTEGER,
