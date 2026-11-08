@@ -139,79 +139,112 @@ async function sleepWithGemPause(durationMs) {
     }
 }
 
-// Calculate gem levels from the number of shards
-async function calculateGemLevels(numShards, useExtraShard, ProtLevel, arnebiaPrice, interactiveOptions = {}) {
-    const { interactive = false, progressBar = null } = interactiveOptions;
-    let gemLevels = new Array(10).fill(0);
-    let leftoverShardsByLevel = new Array(10).fill(0);
-    let totalShardsUsed = 0;
-    let runesUsed = 0;
-    const shardsPerGemLevel = buildShardsPerGemLevel();
-    usedShardCounter = 0;
+// ---------------------------------------------------------------------------
+// Gem combining rules, as the game states them (and as players have confirmed):
+// - 3 gems of one level combine into 1 gem a level higher, with a 50% chance.
+// - From level 2 up, adding 1 shard of the same colour and level adds 20%.
+// - On a failure one gem shatters into a shard of its level; the other 2 are kept.
+// - The extra shard is used up on every attempt, success or failure...
+// - ...except that a Gem Protection Rune (399 diamonds) keeps everything on a
+//   failure: no gem shatters and the extra shard is kept too.
+// ---------------------------------------------------------------------------
+const GEM_BASE_SUCCESS = 0.50;
+const EXTRA_SHARD_BONUS = 0.20;
+const EXTRA_SHARD_MIN_LEVEL = 2;   // the game only allows an extra shard from level 2 gems up
+const PROTECTION_RUNE_USED_ON_SUCCESS = false; // runes are only counted when they save a failure
 
-    gemLevels[1] = Math.floor(numShards / 4);
-    leftoverShardsByLevel[1] = numShards % 4;
-
-    if (progressBar) {
-        progressBar.max = numShards;
+// One combine attempt of 3 gems of `level`, applied to the gems/shards inventory arrays.
+// Returns what happened so callers can log it.
+function combineGemsOnce(level, gems, shards, useExtraShard, isProtected) {
+    const usesShard = useExtraShard && level >= EXTRA_SHARD_MIN_LEVEL && shards[level] > 0;
+    const success = isSuccess(GEM_BASE_SUCCESS + (usesShard ? EXTRA_SHARD_BONUS : 0));
+    let runeUsed = false;
+    if (success) {
+        gems[level] -= 3;
+        gems[level + 1] += 1;
+        if (usesShard) shards[level]--;
+        runeUsed = isProtected && PROTECTION_RUNE_USED_ON_SUCCESS;
+    } else if (isProtected) {
+        runeUsed = true; // the rune saves all three gems and the extra shard
+    } else {
+        if (usesShard) shards[level]--;
+        gems[level] -= 1;
+        shards[level] += 1; // the shattered gem leaves a shard of its level
     }
+    return { success, usesShard, runeUsed };
+}
 
+// Combine everything upwards, level by level, like a player clearing their bag.
+async function combineAllGems(gems, shards, useExtraShard, ProtLevel, interactiveOptions = {}) {
+    const { interactive = false, progressBar = null } = interactiveOptions;
+    const shardsPerGemLevel = buildShardsPerGemLevel();
     const delay = interactive ? 350 : 0;
+    let runesUsed = 0;
+    let attempts = 0;
 
     for (let currentLevel = 1; currentLevel < 9; currentLevel++) {
-        while (gemLevels[currentLevel] >= 3) {
-            let successRate = 0.50; // Default success rate
-            let isProtected = currentLevel >= ProtLevel;
-            if (useExtraShard && leftoverShardsByLevel[currentLevel] > 0 && !isProtected) {
-                successRate = 0.70; // Increased success rate when using an extra shard
-            }
-
+        while (gems[currentLevel] >= 3) {
+            const isProtected = currentLevel >= ProtLevel;
+            attempts++;
             usedShardCounter += shardsPerGemLevel[currentLevel] * 3;
-            const attemptNumber = usedShardCounter / shardsPerGemLevel[1];
+
             if (interactive) {
                 await waitForGemResume();
-                appendGemLog(`Combining 3x Level ${currentLevel} (Attempt ${attemptNumber.toFixed(0)})...`, { skipTextWhenSound: true });
             }
+            const result = combineGemsOnce(currentLevel, gems, shards, useExtraShard, isProtected);
+            if (result.runeUsed) runesUsed++;
 
-            if (isSuccess(successRate)) {
-                gemLevels[currentLevel] -= 3;
-                gemLevels[currentLevel + 1] += 1;
-                if (interactive) {
-                    appendGemLog(`Success! Created Level ${currentLevel + 1}.`, { soundKey: 'success', skipTextWhenSound: true });
+            if (interactive) {
+                const extras = [];
+                if (result.usesShard) extras.push('an extra shard');
+                if (isProtected) extras.push('a protection rune');
+                const withText = extras.length ? ` with ${extras.join(' and ')}` : '';
+                appendGemLog(`Attempt ${attempts}: combining 3 Level ${currentLevel} gems${withText}.`, { skipTextWhenSound: true });
+                if (result.success) {
+                    appendGemLog(`Success! Created a Level ${currentLevel + 1} gem.`, { soundKey: 'success', skipTextWhenSound: true });
+                } else if (isProtected) {
+                    appendGemLog(`Failed, but the protection rune kept all your gems${result.usesShard ? ' and the extra shard' : ''}.`, { soundKey: 'fail', skipTextWhenSound: true });
+                } else {
+                    appendGemLog(`Failed! One Level ${currentLevel} gem shattered into a shard${result.usesShard ? ', and the extra shard was used up' : ''}.`, { soundKey: 'fail', skipTextWhenSound: true });
                 }
-                if (useExtraShard && leftoverShardsByLevel[currentLevel] > 0 && !isProtected) {
-                    leftoverShardsByLevel[currentLevel]--; // Decrementing an extra shard if used
-                }
-            } else {
-                if (!isProtected) {
-                    leftoverShardsByLevel[currentLevel]++; // Incrementing leftover shards if the gem shatters
-                    gemLevels[currentLevel]--; // Decrementing a gem as it shatters
-                    if (interactive) {
-                        appendGemLog(`Fail! Lost one Level ${currentLevel} gem, gained 1 shard.`, { soundKey: 'fail', skipTextWhenSound: true });
-                    }
-                }
-                runesUsed += isProtected ? 1 : 0;
             }
 
             if (progressBar) {
                 progressBar.value = Math.min(progressBar.max, usedShardCounter);
             }
-
             if (delay) {
                 await sleepWithGemPause(delay);
             }
         }
     }
+    return runesUsed;
+}
 
-    totalShardsUsed = numShards - leftoverShardsByLevel.reduce((a, b) => a + b, 0);
+// Calculate gem levels from the number of shards
+async function calculateGemLevels(numShards, useExtraShard, ProtLevel, arnebiaPrice, interactiveOptions = {}) {
+    const gems = new Array(10).fill(0);
+    const shards = new Array(10).fill(0);
+    usedShardCounter = 0;
+
+    gems[1] = Math.floor(numShards / 4);
+    shards[1] = numShards % 4;
+
+    if (interactiveOptions.progressBar) {
+        interactiveOptions.progressBar.max = Math.max(numShards, 1);
+        interactiveOptions.progressBar.value = 0;
+    }
+
+    const runesUsed = await combineAllGems(gems, shards, useExtraShard, ProtLevel, interactiveOptions);
+    const leftoverShards = shards.reduce((a, b) => a + b, 0);
+    const shardsUsed = numShards - leftoverShards;
 
     return {
-        shardsUsed: totalShardsUsed,
-        totalGemCreationCost: totalShardsUsed * arnebiaPrice,
-        gemLevels: gemLevels,
-        leftoverShards: leftoverShardsByLevel.reduce((a, b) => a + b, 0),
-        leftoverShardsByLevel: leftoverShardsByLevel,
-        runesUsed: runesUsed
+        shardsUsed,
+        totalGemCreationCost: shardsUsed * arnebiaPrice,
+        gemLevels: gems,
+        leftoverShards,
+        leftoverShardsByLevel: shards,
+        runesUsed
     };
 }
 
@@ -223,119 +256,81 @@ async function calculateFromMultipleGems(
     arnebiaPrice,
     interactiveOptions = {}
 ) {
-    const { interactive = false, progressBar = null } = interactiveOptions;
-    const gemLevels = new Array(10).fill(0);
-    const leftoverShardsByLevel = new Array(10).fill(0);
+    const gems = new Array(10).fill(0);
+    const shards = new Array(10).fill(0);
     const shardsPerGemLevel = buildShardsPerGemLevel();
-    let runesUsed = 0;
-    let localShardCounter = 0;
-    const delay = interactive ? 350 : 0;
-
     usedShardCounter = 0;
 
     gemEntries.forEach(({ level, count }) => {
         const normalizedLevel = Math.max(1, Math.min(9, parseInt(level, 10)));
         const normalizedCount = Math.max(0, parseInt(count, 10) || 0);
-        gemLevels[normalizedLevel] += normalizedCount;
+        gems[normalizedLevel] += normalizedCount;
     });
 
-    const totalStartingShards = gemLevels.reduce((total, count, level) => {
+    const totalStartingShards = gems.reduce((total, count, level) => {
         return total + (count * (shardsPerGemLevel[level] || 0));
     }, 0);
 
-    if (progressBar) {
-        progressBar.max = Math.max(totalStartingShards, 1);
-        progressBar.value = 0;
+    if (interactiveOptions.progressBar) {
+        interactiveOptions.progressBar.max = Math.max(totalStartingShards, 1);
+        interactiveOptions.progressBar.value = 0;
     }
 
-    for (let currentLevel = 1; currentLevel < 9; currentLevel++) {
-        while (gemLevels[currentLevel] >= 3) {
-            let successRate = 0.50; // Default success rate
-            const isProtected = currentLevel >= ProtLevel;
-            if (useExtraShard && leftoverShardsByLevel[currentLevel] > 0 && !isProtected) {
-                successRate = 0.70; // Increased success rate when using an extra shard
-            }
-
-            localShardCounter += shardsPerGemLevel[currentLevel] * 3;
-            usedShardCounter = localShardCounter;
-
-            if (interactive) {
-                await waitForGemResume();
-                appendGemLog(
-                    `Combining 3x Level ${currentLevel} gems...`,
-                    { skipTextWhenSound: true }
-                );
-            }
-
-            if (isSuccess(successRate)) {
-                gemLevels[currentLevel] -= 3;
-                gemLevels[currentLevel + 1] += 1;
-                if (interactive) {
-                    appendGemLog(
-                        `Success! Created Level ${currentLevel + 1}.`,
-                        { soundKey: 'success', skipTextWhenSound: true }
-                    );
-                }
-                if (useExtraShard && leftoverShardsByLevel[currentLevel] > 0 && !isProtected) {
-                    leftoverShardsByLevel[currentLevel]--; // Decrementing an extra shard if used
-                }
-            } else {
-                if (!isProtected) {
-                    leftoverShardsByLevel[currentLevel]++;
-                    gemLevels[currentLevel]--;
-                    if (interactive) {
-                        appendGemLog(
-                            `Fail! Lost one Level ${currentLevel} gem, gained 1 shard.`,
-                            { soundKey: 'fail', skipTextWhenSound: true }
-                        );
-                    }
-                }
-                runesUsed += isProtected ? 1 : 0;
-            }
-
-            if (progressBar) {
-                progressBar.value = Math.min(progressBar.max, localShardCounter);
-            }
-
-            if (delay) {
-                await sleepWithGemPause(delay);
-            }
-        }
-    }
-
-    const leftoverShards = leftoverShardsByLevel.reduce((a, b) => a + b, 0);
+    const runesUsed = await combineAllGems(gems, shards, useExtraShard, ProtLevel, interactiveOptions);
+    const leftoverShards = shards.reduce((a, b) => a + b, 0);
     const shardsUsed = Math.max(0, totalStartingShards - leftoverShards);
 
     return {
         shardsUsed,
         totalGemCreationCost: shardsUsed * arnebiaPrice,
-        gemLevels,
+        gemLevels: gems,
         leftoverShards,
-        leftoverShardsByLevel,
+        leftoverShardsByLevel: shards,
         runesUsed
     };
 }
 
-// Calculate target gem level from shards
-function calculateTargetGemLevel(numShards, targetGemLevel, useExtraShard) {
-    let shardsNeeded = 4;
-    let level = 1;
-    let totalShardsRequired = 0;
+// How many shards does it take to make ONE gem of targetGemLevel?
+// Simulates the real process: buy level 1 shards, make gems from 4 shards, combine
+// 3 gems at a time, keep the shards that failures leave behind (and turn 4 of them
+// back into a gem of their level, which never fails). One run is pure luck, so this
+// runs many times and reports the average, plus the luckiest and unluckiest run.
+function simulateShardsForOneGem(targetGemLevel, useExtraShard) {
+    const gems = new Array(11).fill(0);
+    const shards = new Array(11).fill(0);
+    let bought = 0;
 
-    while (level < targetGemLevel) {
-        totalShardsRequired += shardsNeeded;
-        let successRate = useExtraShard ? 0.70 : 0.50;
-        if (isSuccess(successRate)) {
-            level++;
-            shardsNeeded *= 3;
-        } else {
-            if (useExtraShard) {
-                totalShardsRequired++;
+    // Make sure we hold at least `count` gems of `level`.
+    function ensureGems(level, count) {
+        while (gems[level] < count) {
+            if (shards[level] >= 4) {
+                shards[level] -= 4;
+                gems[level] += 1;
+            } else if (level === 1) {
+                bought++;
+                shards[1]++;
+            } else {
+                ensureGems(level - 1, 3);
+                combineGemsOnce(level - 1, gems, shards, useExtraShard, false);
             }
         }
     }
 
-    return totalShardsRequired;
+    ensureGems(targetGemLevel, 1);
+    return bought;
+}
+
+function calculateTargetGemLevel(targetGemLevel, useExtraShard, runs = 1000) {
+    let total = 0;
+    let min = Infinity;
+    let max = 0;
+    for (let i = 0; i < runs; i++) {
+        const bought = simulateShardsForOneGem(targetGemLevel, useExtraShard);
+        total += bought;
+        min = Math.min(min, bought);
+        max = Math.max(max, bought);
+    }
+    return { average: Math.round(total / runs), min, max, runs };
 }
 
 // Event listeners for UI controls
@@ -461,8 +456,13 @@ gemStartButton.addEventListener('click', async function() {
             gemPauseButton.disabled = true;
             return;
         }
-        const totalShardsRequired = calculateTargetGemLevel(numShards, targetGemLevel, useExtraShard);
-        resultMessage = `To create a Level ${targetGemLevel} of ${gemTypeName}, you need ${totalShardsRequired} shards.`;
+        const target = calculateTargetGemLevel(targetGemLevel, useExtraShard);
+        const gemLabel = gemTypeName.replace(/\s*\(Price:.*\)$/, '');
+        resultMessage = `To create one Level ${targetGemLevel} ${gemLabel}, you need about ${target.average} shards on average`;
+        if (arnebiaPrice > 0) {
+            resultMessage += `, which costs about ${(target.average * arnebiaPrice).toLocaleString('en-US')} arnebia`;
+        }
+        resultMessage += `. That is the average of ${target.runs} simulated tries: the luckiest needed ${target.min} shards and the unluckiest ${target.max}.`;
         if (interactiveGemSimulation) {
             appendGemLog('Interactive simulation is only available when simulating shard usage.');
         }
