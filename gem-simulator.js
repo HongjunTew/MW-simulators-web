@@ -50,21 +50,21 @@ interactiveGemCheckbox.addEventListener('change', toggleGemSoundOption);
 toggleGemSoundOption();
 
 const gemPriceData = [
-    { value: 'ruby', label: 'Ruby', prices: { server1: 2085, server2: 1985 } },
+    { value: 'ruby', label: 'Ruby', prices: { server1: 2720, server2: 1790 } },
     { value: 'sapphire', label: 'Sapphire', prices: { server1: 20, server2: 20 } },
-    { value: 'tiger', label: 'Tiger Eye stone', prices: { server1: 2900, server2: 1890 } },
-    { value: 'opal', label: 'Opal', prices: { server1: 2735, server2: 1820 } },
-    { value: 'spinel', label: 'Spinel', prices: { server1: 20, server2: 60 } },
-    { value: 'aquamarine', label: 'Aquamarine', prices: { server1: 21, server2: 37 } },
-    { value: 'garnet', label: 'Garnet', prices: { server1: 4230, server2: 5075 } },
-    { value: 'blond', label: 'Blond jade', prices: { server1: 5705, server2: 4390 } },
-    { value: 'grape', label: 'Grape stone', prices: { server1: 21, server2: 295 } },
-    { value: 'olivine', label: 'Olivine', prices: { server1: 20, server2: 20 } },
-    { value: 'topaz', label: 'Topaz', prices: { server1: 205, server2: 66 } },
-    { value: 'obsidian', label: 'Obsidian', prices: { server1: 2785, server2: 4220 } },
-    { value: 'sunlight', label: 'Sunlight', prices: { server1: 245, server2: 96 } },
-    { value: 'moonstone', label: 'Moonstone', prices: { server1: 1880, server2: 2135 } },
-    { value: 'turquoise', label: 'Turquoise', prices: { server1: 1570, server2: 2050 } }
+    { value: 'tiger', label: 'Tiger Eye stone', prices: { server1: 2255, server2: 2185 } },
+    { value: 'opal', label: 'Opal', prices: { server1: 2240, server2: 2230 } },
+    { value: 'spinel', label: 'Spinel', prices: { server1: 21, server2: 21 } },
+    { value: 'aquamarine', label: 'Aquamarine', prices: { server1: 20, server2: 20 } },
+    { value: 'garnet', label: 'Garnet', prices: { server1: 3945, server2: 5025 } },
+    { value: 'blond', label: 'Blond jade', prices: { server1: 5915, server2: 5020 } },
+    { value: 'grape', label: 'Grape stone', prices: { server1: 72, server2: 30 } },
+    { value: 'olivine', label: 'Olivine', prices: { server1: 21, server2: 20 } },
+    { value: 'topaz', label: 'Topaz', prices: { server1: 695, server2: 27 } },
+    { value: 'obsidian', label: 'Obsidian', prices: { server1: 2565, server2: 3970 } },
+    { value: 'sunlight', label: 'Sunlight', prices: { server1: 44, server2: 20 } },
+    { value: 'moonstone', label: 'Moonstone', prices: { server1: 2585, server2: 2465 } },
+    { value: 'turquoise', label: 'Turquoise', prices: { server1: 1275, server2: 1875 } }
 ];
 
 function populateGemTypes(serverKey) {
